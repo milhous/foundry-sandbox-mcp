@@ -36,3 +36,15 @@ const cmd = `docker exec foundry-sandbox forge test --match-path ${testPath}`;
 期望目标
 
 运行沙盒验证，User: "现在在沙盒里运行这个测试，并告诉我结果。"，Agent 调用工具，系统返回: (Docker 运行结果，例如 FAIL. Reason: ReentrancyGuard: reentrant call)
+
+优化 MPC，仅提供 forge_test 方法。
+
+1. 调用 forge_test 时，传入项目根路径。
+
+2. 检查 docker 容器是否存在，如果 docker 容器不存在，启动 docker，创建 docker 容器，将传入的项目目录挂载到 docker 容器中，使 docker 容器可以读取项目文件
+
+3. 所有的测试行为均在 docker 容器中自动运行
+
+4. 得到测试的结果返回并输入到主机
+
+5. 清理卸载 docker 容器，保证每次都是全新的测试环境
