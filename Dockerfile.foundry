@@ -1,0 +1,12 @@
+FROM ghcr.io/foundry-rs/foundry:latest
+
+USER root
+# Keep the container minimal but predictable.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates bash \
+  && rm -rf /var/lib/apt/lists/*
+
+USER foundry
+WORKDIR /workspace
+ENTRYPOINT []
+CMD ["bash"]

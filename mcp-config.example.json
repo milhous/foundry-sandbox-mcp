@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "foundry-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/foundry-mcp/dist/server.js"],
-      "env": {}
-    }
-  }
-}
