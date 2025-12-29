@@ -1,6 +1,6 @@
 /**
  * Docker 容器管理器
- * 
+ *
  * 负责管理 Docker 容器的生命周期和命令执行
  * 每次测试时创建新容器，测试完成后删除，确保全新环境
  */
@@ -35,7 +35,9 @@ export class DockerManager {
       await this.docker.ping();
     } catch (error) {
       throw new Error(
-        `Docker is not available. Please ensure Docker is running. Error: ${error instanceof Error ? error.message : String(error)}`
+        `Docker is not available. Please ensure Docker is running. Error: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
     }
   }
@@ -108,11 +110,195 @@ export class DockerManager {
 
       this.containerId = container.id;
       console.error(`Container '${containerName}' created and started`);
+
+      // 容器创建后，自动安装依赖
+      await this.ensureDependenciesInstalled();
     } catch (error) {
       throw new Error(
-        `Failed to create and start container: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to create and start container: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
     }
+  }
+
+  /**
+   * 确保项目依赖已安装
+   * 检查 lib 目录，如果不存在或为空，自动安装 OpenZeppelin 依赖
+   */
+  private async ensureDependenciesInstalled(): Promise<void> {
+    if (!this.containerId) {
+      return;
+    }
+
+    try {
+      // 直接使用容器对象执行命令，避免递归调用
+      const container = this.docker.getContainer(this.containerId);
+
+      // 检查 lib 目录是否存在且不为空
+      const checkExec = await container.exec({
+        Cmd: [
+          "sh",
+          "-c",
+          "test -d lib && [ \"$(ls -A lib 2>/dev/null)\" ] && echo 'exists' || echo 'missing'",
+        ],
+        AttachStdout: true,
+        AttachStderr: true,
+        WorkingDir: "/workspace",
+      });
+
+      const checkStream = await checkExec.start({ hijack: true, stdin: false });
+      const checkResult = await this._captureStreamOutput(
+        checkExec,
+        checkStream,
+        10000
+      );
+      const libExists = checkResult.stdout.trim() === "exists";
+
+      if (!libExists) {
+        console.error(
+          "lib 目录不存在或为空，开始自动安装 OpenZeppelin 依赖..."
+        );
+
+        // 安装 OpenZeppelin 依赖
+        // 根据项目需要，安装所有可能用到的 OpenZeppelin 依赖
+        // 使用别名安装不同版本，以便 remappings 可以正确映射
+        const dependencies = [
+          "OpenZeppelin/openzeppelin-contracts",
+          "OpenZeppelin/openzeppelin-contracts-upgradeable",
+          "openzeppelin-contracts-v4=OpenZeppelin/openzeppelin-contracts@v4.9.0",
+          "openzeppelin-contracts-upgradeable-v4=OpenZeppelin/openzeppelin-contracts-upgradeable@v4.9.0",
+        ];
+
+        for (const dep of dependencies) {
+          try {
+            console.error(`安装依赖: ${dep}...`);
+            const installExec = await container.exec({
+              Cmd: ["forge", "install", dep, "--no-git"],
+              AttachStdout: true,
+              AttachStderr: true,
+              WorkingDir: "/workspace",
+            });
+
+            const installStream = await installExec.start({
+              hijack: true,
+              stdin: false,
+            });
+            const installResult = await this._captureStreamOutput(
+              installExec,
+              installStream,
+              120000
+            );
+
+            if (installResult.exitCode === 0) {
+              console.error(`✓ ${dep} 安装成功`);
+            } else {
+              console.error(`⚠ ${dep} 安装可能失败: ${installResult.stderr}`);
+            }
+          } catch (error) {
+            console.error(
+              `⚠ 安装 ${dep} 时出错: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+            // 继续安装其他依赖，不中断流程
+          }
+        }
+
+        console.error("依赖安装完成");
+      } else {
+        console.error("lib 目录已存在，跳过依赖安装");
+      }
+    } catch (error) {
+      // 依赖安装失败不应该阻止测试执行
+      console.error(
+        `Warning: Failed to check/install dependencies: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  /**
+   * 捕获流输出（内部方法，用于避免递归调用）
+   */
+  private async _captureStreamOutput(
+    exec: Docker.Exec,
+    stream: NodeJS.ReadableStream & { destroy?: () => void },
+    timeout: number = 300000
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    const stdoutStream = new PassThrough();
+    const stderrStream = new PassThrough();
+
+    stdoutStream.on("data", (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
+    });
+
+    stderrStream.on("data", (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+    });
+
+    // 获取容器对象以使用 demuxStream
+    if (!this.containerId) {
+      throw new Error("Container ID is not set");
+    }
+    const container = this.docker.getContainer(this.containerId);
+    container.modem.demuxStream(stream, stdoutStream, stderrStream);
+
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        if (typeof (stream as any).destroy === "function") {
+          (stream as any).destroy();
+        }
+        reject(new Error(`Command execution timeout after ${timeout}ms`));
+      }, timeout);
+
+      stream.on("end", async () => {
+        clearTimeout(timeoutId);
+
+        await new Promise<void>((resolveStream) => {
+          let ended = 0;
+          const checkEnd = () => {
+            ended++;
+            if (ended === 2) resolveStream();
+          };
+          stdoutStream.on("end", checkEnd);
+          stderrStream.on("end", checkEnd);
+        });
+
+        try {
+          // 从 exec 对象获取 inspect 以获取 exitCode
+          const inspect = await exec.inspect();
+          const exitCode = inspect.ExitCode ?? -1;
+
+          const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+          const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+          resolve({ stdout, stderr, exitCode });
+        } catch (error) {
+          reject(
+            new Error(
+              `Failed to inspect exec: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            )
+          );
+        }
+      });
+
+      stream.on("error", (error: Error) => {
+        clearTimeout(timeoutId);
+        reject(
+          new Error(
+            `Stream error: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          )
+        );
+      });
+    });
   }
 
   /**
@@ -125,10 +311,10 @@ export class DockerManager {
 
     try {
       const container = this.docker.getContainer(this.containerId);
-      
+
       // 检查容器状态
       const info = await container.inspect();
-      
+
       // 如果容器正在运行，先停止
       if (info.State.Running) {
         await container.stop({ t: 10 }); // 10秒超时
@@ -151,7 +337,9 @@ export class DockerManager {
       }
       // 其他错误记录但不抛出，确保清理流程继续
       console.error(
-        `Warning: Failed to remove container: ${error instanceof Error ? error.message : String(error)}`
+        `Warning: Failed to remove container: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
       this.containerId = null;
     }
@@ -159,7 +347,7 @@ export class DockerManager {
 
   /**
    * 在容器中执行命令
-   * 
+   *
    * @param command - 要执行的命令
    * @param args - 命令参数数组
    * @param timeout - 超时时间（毫秒），默认 5 分钟
@@ -170,7 +358,7 @@ export class DockerManager {
     args: string[] = [],
     timeout: number = 300000
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    // 如果容器不存在，创建并启动
+    // 如果容器不存在，创建并启动（会自动安装依赖）
     if (!this.containerId) {
       await this.createAndStartContainer();
     }
@@ -247,7 +435,9 @@ export class DockerManager {
         } catch (error) {
           reject(
             new Error(
-              `Failed to inspect exec: ${error instanceof Error ? error.message : String(error)}`
+              `Failed to inspect exec: ${
+                error instanceof Error ? error.message : String(error)
+              }`
             )
           );
         }
@@ -257,7 +447,9 @@ export class DockerManager {
         clearTimeout(timeoutId);
         reject(
           new Error(
-            `Stream error: ${error instanceof Error ? error.message : String(error)}`
+            `Stream error: ${
+              error instanceof Error ? error.message : String(error)
+            }`
           )
         );
       });
@@ -278,4 +470,3 @@ export class DockerManager {
     return this.containerId;
   }
 }
-
