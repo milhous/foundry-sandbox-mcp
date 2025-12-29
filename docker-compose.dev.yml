@@ -1,0 +1,40 @@
+version: "3.8"
+
+# 开发环境配置 - 支持热重载和文件同步
+services:
+  foundry-sandbox:
+    image: ghcr.io/foundry-rs/foundry:latest
+    container_name: foundry-mcp-sandbox-dev
+    working_dir: /app
+    volumes:
+      # 挂载测试合约目录（双向同步）
+      - ./test-contract:/app:rw
+      # 挂载缓存目录（持久化）
+      - foundry-cache:/root/.foundry
+      # 可选：挂载整个项目目录用于开发
+      - ./:/workspace:ro
+    stdin_open: true
+    tty: true
+    command: tail -f /dev/null
+    environment:
+      - FOUNDRY_PROFILE=default
+      - WATCH=true
+    networks:
+      - foundry-network
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+volumes:
+  foundry-cache:
+    driver: local
+
+networks:
+  foundry-network:
+    driver: bridge

@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  foundry-sandbox:
+    image: ghcr.io/foundry-rs/foundry:latest
+    container_name: foundry-mcp-sandbox
+    working_dir: /app
+    volumes:
+      # 挂载当前项目目录到容器
+      - ./test-contract:/app
+      # 可选：挂载其他目录
+      - foundry-cache:/root/.foundry
+    stdin_open: true
+    tty: true
+    command: tail -f /dev/null # 保持容器运行
+    environment:
+      - FOUNDRY_PROFILE=default
+    networks:
+      - foundry-network
+
+volumes:
+  foundry-cache:
+    driver: local
+
+networks:
+  foundry-network:
+    driver: bridge

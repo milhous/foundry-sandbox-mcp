@@ -1,0 +1,42 @@
+{
+  "name": "foundry-mcp",
+  "version": "1.0.0",
+  "description": "MCP Server for running Foundry commands in Docker sandbox",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "foundry-mcp": "./dist/server.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "jest",
+    "test:docker": "tsx src/test-docker.ts",
+    "test:mcp": "tsx src/test-mcp.ts",
+    "test:integration": "tsx src/test-integration.ts",
+    "test:contract": "tsx src/test-contract-mcp.ts",
+    "test:compose": "tsx src/test-compose.ts",
+    "test:all": "yarn test:docker && yarn test:mcp && yarn test:integration"
+  },
+  "keywords": [
+    "mcp",
+    "foundry",
+    "docker",
+    "ethereum",
+    "solidity"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "dockerode": "^4.0.2",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^3.3.47",
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
