@@ -54,7 +54,7 @@ class FoundrySandboxServer {
           {
             name: "forge_test",
             description:
-              "在 Docker 容器中运行 forge test 命令。支持匹配特定测试路径。",
+              "在 Docker 容器中运行 forge test 命令。每次测试时创建新容器，测试完成后自动清理，确保全新环境。支持匹配特定测试路径。",
             inputSchema: {
               type: "object",
               properties: {
@@ -82,41 +82,6 @@ class FoundrySandboxServer {
               required: ["projectPath"],
             },
           },
-          {
-            name: "forge_build",
-            description: "在 Docker 容器中运行 forge build 命令",
-            inputSchema: {
-              type: "object",
-              properties: {
-                projectPath: {
-                  type: "string",
-                  description:
-                    "Foundry 项目根路径（包含 foundry.toml 的目录），必须是绝对路径",
-                },
-                extraArgs: {
-                  type: "array",
-                  items: { type: "string" },
-                  description: "额外的 forge build 参数",
-                },
-              },
-              required: ["projectPath"],
-            },
-          },
-          {
-            name: "forge_clean",
-            description: "在 Docker 容器中运行 forge clean 命令，清理构建缓存",
-            inputSchema: {
-              type: "object",
-              properties: {
-                projectPath: {
-                  type: "string",
-                  description:
-                    "Foundry 项目根路径（包含 foundry.toml 的目录），必须是绝对路径",
-                },
-              },
-              required: ["projectPath"],
-            },
-          },
         ],
       };
     });
@@ -129,10 +94,6 @@ class FoundrySandboxServer {
         switch (name) {
           case "forge_test":
             return await this.forgeTool.runTest(args);
-          case "forge_build":
-            return await this.forgeTool.runBuild(args);
-          case "forge_clean":
-            return await this.forgeTool.runClean(args);
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,

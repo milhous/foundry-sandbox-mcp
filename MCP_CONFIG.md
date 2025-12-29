@@ -43,8 +43,9 @@
 
 - 将 `/absolute/path/to/foundry-mcp` 替换为 MCP Server 的实际绝对路径
 - 确保已经运行 `yarn build` 构建项目
+- **确保 Docker 镜像已构建**：`docker build -t foundry-sandbox:latest -f Dockerfile.foundry .`
 - **项目路径在工具调用时传入**，无需在配置中设置
-- **Docker 容器会自动创建和启动**，无需手动运行 `docker-compose up -d`
+- **Docker 容器会自动管理**：每次测试时创建新容器，测试完成后自动删除
 
 ### 开发模式配置（使用 tsx）
 
@@ -113,19 +114,26 @@ AI 会调用工具，传入项目路径：
 
 ## 理解项目路径配置
 
-### 自动 Docker 管理
+### 自动 Docker 容器管理
 
-MCP Server 现在支持**自动管理 Docker 容器**：
+MCP Server 现在支持**自动管理 Docker 容器生命周期**：
 
-- ✅ **自动创建容器**：如果容器不存在，会自动使用 `docker-compose` 创建
-- ✅ **自动启动容器**：如果容器已停止，会自动启动
+- ✅ **每次测试时创建新容器**：使用唯一名称（基于时间戳），确保全新环境
+- ✅ **自动挂载项目目录**：将传入的项目路径挂载到容器的 `/workspace` 目录
+- ✅ **测试完成后自动清理**：删除容器，确保每次测试都在全新环境中运行
 - ✅ **动态项目路径**：项目路径在工具调用时作为参数传入
+
+**重要**：确保 Docker 镜像 `foundry-sandbox:latest` 已构建。如果不存在，请运行：
+
+```bash
+docker build -t foundry-sandbox:latest -f Dockerfile.foundry .
+```
 
 ### 项目路径传入方式
 
 **在工具调用时传入项目路径**：
 
-所有工具（`forge_test`、`forge_build`、`forge_clean`）都需要 `projectPath` 参数：
+`forge_test` 工具需要 `projectPath` 参数：
 
 ```json
 {
@@ -142,6 +150,7 @@ MCP Server 现在支持**自动管理 Docker 容器**：
 - ✅ 一个 MCP Server 可以处理多个不同的 Foundry 项目
 - ✅ 无需在配置中绑定项目路径
 - ✅ 更灵活，可以在运行时切换项目
+- ✅ 每次测试都在全新环境中运行，确保测试结果可靠
 
 ### 如何获取正确的项目路径
 
@@ -176,37 +185,48 @@ cd
 
 ## 常见问题
 
-### 1. 找不到容器
+### 1. Docker 镜像不存在
 
-**错误**: `Container 'foundry-sandbox' not found`
+**错误**: `Docker image 'foundry-sandbox:latest' not found`
 
 **解决**:
 
-- MCP Server 现在会自动创建容器，如果仍然失败：
-  - 检查工具调用时传入的 `projectPath` 参数是否正确
-  - 确保项目目录中存在 `docker-compose.yml` 文件
-  - 确保 `projectPath` 是绝对路径
-  - 手动运行 `docker-compose up -d foundry-sandbox` 作为备选方案
+- 构建 Docker 镜像：
+  ```bash
+  docker build -t foundry-sandbox:latest -f Dockerfile.foundry .
+  ```
+- 确保在包含 `Dockerfile.foundry` 的目录中运行构建命令
 
-### 2. Docker 未运行
+### 2. 容器创建失败
+
+**错误**: `Failed to create and start container`
+
+**解决**:
+
+- 检查 Docker 是否运行：`docker ps`
+- 检查工具调用时传入的 `projectPath` 参数是否正确
+- 确保 `projectPath` 是绝对路径
+- 确保项目目录存在且可访问
+
+### 3. Docker 未运行
 
 **错误**: `Docker is not available`
 
 **解决**: 启动 Docker Desktop
 
-### 3. 路径错误
+### 4. 路径错误
 
-**错误**: `Cannot find module` 或 `ENOENT` 或 `Container not found`
+**错误**: `Cannot find module` 或 `ENOENT` 或路径相关错误
 
 **解决**:
 
 - 检查工具调用时传入的 `projectPath` 参数是否为绝对路径
-- **确保项目路径正确**：必须指向 Foundry 项目根目录（包含 `foundry.toml` 和 `docker-compose.yml` 的目录）
+- **确保项目路径正确**：必须指向 Foundry 项目根目录（包含 `foundry.toml` 的目录）
 - 确保 `args` 中的路径指向编译后的 `dist/index.js` 文件
 - 确保已运行 `yarn build`
 - 如果项目路径设置错误，Docker 容器会挂载错误的目录
 
-### 4. 权限问题
+### 5. 权限问题
 
 **错误**: 权限被拒绝
 
@@ -214,6 +234,7 @@ cd
 
 - 确保 Node.js 有执行权限
 - 检查 Docker 权限设置
+- 确保 Docker 有权限访问项目目录
 
 ## 下一步
 

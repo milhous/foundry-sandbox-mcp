@@ -2,23 +2,20 @@
  * Docker 容器管理器
  * 
  * 负责管理 Docker 容器的生命周期和命令执行
+ * 每次测试时创建新容器，测试完成后删除，确保全新环境
  */
 
 import Docker from "dockerode";
 import { PassThrough } from "stream";
-import { exec } from "child_process";
-import { promisify } from "util";
 import { resolve } from "path";
-
-const execAsync = promisify(exec);
 
 /**
  * Docker 管理器类
  */
 export class DockerManager {
   private docker: Docker;
-  private containerName: string = "foundry-sandbox";
   private projectPath: string;
+  private containerId: string | null = null;
 
   constructor(projectPath: string) {
     this.docker = new Docker();
@@ -44,66 +41,119 @@ export class DockerManager {
   }
 
   /**
-   * 使用 docker-compose 启动容器
+   * 确保 Docker 镜像存在
    */
-  private async startContainerWithCompose(): Promise<void> {
+  private async ensureImageExists(): Promise<void> {
     try {
-      // 使用 docker-compose 启动容器
-      const { stdout, stderr } = await execAsync(
-        `docker-compose -f "${this.projectPath}/docker-compose.yml" up -d foundry-sandbox`,
-        {
-          cwd: this.projectPath,
-          env: {
-            ...process.env,
-            FOUNDRY_PROJECT_PATH: this.projectPath,
-          },
-        }
-      );
-
-      if (stderr && !stderr.includes("Creating") && !stderr.includes("Starting")) {
-        console.error(`Docker Compose stderr: ${stderr}`);
+      await this.docker.getImage("foundry-sandbox:latest").inspect();
+    } catch (error: unknown) {
+      if (
+        error instanceof Error &&
+        (error.message.includes("No such image") ||
+          (error as { statusCode?: number }).statusCode === 404)
+      ) {
+        throw new Error(
+          "Docker image 'foundry-sandbox:latest' not found. Please build it first using: docker build -t foundry-sandbox:latest -f Dockerfile.foundry ."
+        );
+      } else {
+        throw error;
       }
+    }
+  }
 
-      // 等待容器启动
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+  /**
+   * 创建并启动容器
+   * 每次测试时创建新容器，使用唯一名称
+   */
+  async createAndStartContainer(): Promise<void> {
+    await this.ensureDockerAvailable();
+    await this.ensureImageExists();
+
+    // 生成唯一容器名称（基于时间戳）
+    const timestamp = Date.now();
+    const randomSuffix = Math.random().toString(36).substring(2, 8);
+    const containerName = `foundry-sandbox-${timestamp}-${randomSuffix}`;
+
+    try {
+      // 创建容器
+      const container = await this.docker.createContainer({
+        Image: "foundry-sandbox:latest",
+        name: containerName,
+        Cmd: ["tail", "-f", "/dev/null"], // 保持容器运行
+        WorkingDir: "/workspace",
+        HostConfig: {
+          Binds: [
+            `${this.projectPath}:/workspace`, // 挂载项目目录
+          ],
+          AutoRemove: false, // 手动删除，以便在测试完成后清理
+        },
+        Env: ["FOUNDRY_PROFILE=default"],
+        AttachStdout: true,
+        AttachStderr: true,
+        Tty: true,
+        OpenStdin: true,
+      });
+
+      // 启动容器
+      await container.start();
+
+      // 等待容器完全启动
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // 验证容器是否运行
-      const container = this.docker.getContainer(this.containerName);
       const info = await container.inspect();
       if (!info.State.Running) {
-        throw new Error("Container started but is not running");
+        throw new Error("Container created but is not running");
       }
+
+      this.containerId = container.id;
+      console.error(`Container '${containerName}' created and started`);
     } catch (error) {
       throw new Error(
-        `Failed to start container with docker-compose: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to create and start container: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
 
   /**
-   * 确保容器存在并运行
+   * 删除容器
    */
-  async ensureContainerRunning(): Promise<void> {
-    try {
-      const container = this.docker.getContainer(this.containerName);
-      const info = await container.inspect();
+  async removeContainer(): Promise<void> {
+    if (!this.containerId) {
+      return;
+    }
 
-      // 如果容器已停止，启动它
-      if (!info.State.Running) {
-        await container.start();
+    try {
+      const container = this.docker.getContainer(this.containerId);
+      
+      // 检查容器状态
+      const info = await container.inspect();
+      
+      // 如果容器正在运行，先停止
+      if (info.State.Running) {
+        await container.stop({ t: 10 }); // 10秒超时
       }
+
+      // 删除容器
+      await container.remove({ force: true });
+      console.error(`Container '${this.containerId}' removed`);
+      this.containerId = null;
     } catch (error: unknown) {
-      // 容器不存在，自动创建和启动
+      // 如果容器不存在，忽略错误
       if (
         error instanceof Error &&
         (error.message.includes("No such container") ||
           (error as { statusCode?: number }).statusCode === 404)
       ) {
-        console.error(`Container '${this.containerName}' not found, creating...`);
-        await this.startContainerWithCompose();
-      } else {
-        throw error;
+        console.error(`Container '${this.containerId}' already removed`);
+        this.containerId = null;
+        return;
       }
+      // 其他错误记录但不抛出，确保清理流程继续
+      console.error(
+        `Warning: Failed to remove container: ${error instanceof Error ? error.message : String(error)}`
+      );
+      this.containerId = null;
     }
   }
 
@@ -120,9 +170,12 @@ export class DockerManager {
     args: string[] = [],
     timeout: number = 300000
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    await this.ensureContainerRunning();
+    // 如果容器不存在，创建并启动
+    if (!this.containerId) {
+      await this.createAndStartContainer();
+    }
 
-    const container = this.docker.getContainer(this.containerName);
+    const container = this.docker.getContainer(this.containerId!);
     const fullCommand = [command, ...args];
 
     // 创建执行选项
@@ -212,25 +265,17 @@ export class DockerManager {
   }
 
   /**
-   * 清理容器状态（可选，用于确保干净环境）
-   */
-  async cleanContainerState(): Promise<void> {
-    try {
-      // 清理 forge 缓存和构建输出
-      await this.execCommand("forge", ["clean"]);
-    } catch (error) {
-      // 忽略清理错误，可能缓存不存在
-      console.error(
-        `Warning: Failed to clean container state: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-
-  /**
    * 获取项目路径
    */
   getProjectPath(): string {
     return this.projectPath;
+  }
+
+  /**
+   * 获取容器 ID（用于调试）
+   */
+  getContainerId(): string | null {
+    return this.containerId;
   }
 }
 
