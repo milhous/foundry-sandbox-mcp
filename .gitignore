@@ -1,7 +1,37 @@
+# Dependencies
 node_modules/
+yarn.lock
+
+# Build output
 dist/
-*.log
-.DS_Store
-.env
 *.tsbuildinfo
 
+# Foundry artifacts
+artifacts-foundry/
+cache-foundry/
+out/
+cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+
+# Docker
+.dockerignore

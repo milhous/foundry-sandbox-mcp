@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  foundry-sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.foundry
+    image: foundry-sandbox:latest
+    container_name: foundry-sandbox
+    volumes:
+      # 挂载项目目录到容器，实现文件热同步
+      - .:/workspace
+      # 挂载 foundry.toml 配置文件
+      - ./foundry.toml:/workspace/foundry.toml:ro
+    working_dir: /workspace
+    # 保持容器运行，以便随时执行命令
+    stdin_open: true
+    tty: true
+    # 环境变量
+    environment:
+      - FOUNDRY_PROFILE=default
+    # 网络模式（如果需要访问外部服务）
+    network_mode: bridge
+
+  # Anvil 本地节点服务（可选，用于测试）
+  anvil:
+    build:
+      context: .
+      dockerfile: Dockerfile.foundry
+    image: foundry-sandbox:latest
+    container_name: foundry-anvil
+    command: anvil --host 0.0.0.0
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    environment:
+      - FOUNDRY_PROFILE=default
+    network_mode: bridge
+

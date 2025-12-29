@@ -1,86 +1,353 @@
-# foundry-mcp
+# Foundry Sandbox MCP Server
 
-一个通过 MCP（Model Context Protocol）在 Docker 沙盒中运行 `forge` 命令的 MCP Server（镜像内预装 Foundry）。
+一个基于 Docker 的 Foundry 审计沙盒 MCP Server，允许 AI 在隔离的 Docker 容器中安全地运行 Foundry 命令。
 
-## 适用场景
+## 功能特性
 
-- 让 AI/Agent 在隔离的 Docker 环境里执行 `forge build/test/clean`，避免污染本机环境
-- 文件热同步：本机 Foundry 项目目录挂载到容器内，修改代码即可立刻在容器中生效
+- ✅ **自动 Docker 管理**: 自动创建和启动 Docker 容器，无需手动操作
+- ✅ **环境变量配置**: 通过 `FOUNDRY_PROJECT_PATH` 环境变量指定项目路径，无需绑定 `cwd`
+- ✅ **文件热同步**: 通过 Docker 卷挂载实现项目文件实时同步
+- ✅ **环境一致性**: 无论运行在 Mac、Windows 还是 Linux，行为完全一致
+- ✅ **安全性**: FFI 功能在 Docker 容器中运行，比宿主机更安全
+- ✅ **零污染**: 所有依赖和缓存保留在容器内，保持宿主机干净
+- ✅ **即时节点**: Anvil 作为独立服务常驻后台，可随时重启重置状态
+- ✅ **状态清理**: 每次测试都在干净环境中运行
 
-更完整的说明见 `docs/USAGE.md`。
+## 前置要求
 
-## 前置条件
+- Docker 和 Docker Compose
+- Node.js 18+ 和 Yarn
+- Foundry 项目（包含 `foundry.toml` 配置文件）
 
-- Docker Desktop (or Docker Engine)
-- Node.js 20+
-- 一个可运行的 Foundry 项目目录（通常包含 `foundry.toml`）
+## 快速开始
 
-## 构建沙盒镜像
+### 方式一：使用设置脚本（推荐）
 
 ```bash
-docker build -f Dockerfile.foundry -t foundry-sandbox:latest .
+./scripts/setup.sh
 ```
 
-## 安装与运行 MCP Server
+脚本会自动完成：
+- 检查 Docker 环境
+- 安装依赖
+- 构建项目
+- 启动 Docker 容器
+
+### 方式二：手动安装
+
+1. 克隆或下载项目
+
+2. 安装依赖：
 
 ```bash
 yarn install
-yarn build
-node dist/src/index.js
 ```
 
-### 环境变量
+3. 构建项目：
 
-- `FOUNDRY_MCP_IMAGE` (default: `foundry-sandbox:latest`)
-- `FOUNDRY_MCP_WORKDIR` (default: `/workspace`)
-- `FOUNDRY_MCP_AUTO_BUILD` (default: `true`): 运行前若镜像不存在则自动 `docker build`
-- `FOUNDRY_MCP_BUILD_CONTEXT` (default: server `cwd`): `docker build` 的 context 路径
-- `FOUNDRY_MCP_DOCKERFILE` (default: `<BUILD_CONTEXT>/Dockerfile.foundry`): Dockerfile 路径
-- `FOUNDRY_MCP_CLEANUP_IMAGE` (default: `true`): 每次运行结束后若本次自动构建了镜像则执行 `docker rmi -f <image>`（容器已通过 `--rm` 自动清理）
+```bash
+yarn build
+```
 
-## MCP 工具（tools）
+## Docker 环境管理
 
-所有工具都必须传 `projectPath`（Foundry 项目在宿主机上的路径）。该目录会以 volume 方式挂载到容器的 `FOUNDRY_MCP_WORKDIR`，实现文件热同步。
+### 自动管理（推荐）
 
-- `forge_build`: run `forge build`
-- `forge_test`: run `forge test` (optional `matchPath`)
-- `forge_clean`: run `forge clean`
+**MCP Server 现在会自动管理 Docker 容器**：
 
-### 参数说明
+- ✅ 如果容器不存在，会自动创建
+- ✅ 如果容器已停止，会自动启动
+- ✅ 无需手动运行 `docker-compose up -d`
 
-- `projectPath` (string, required): Foundry 项目目录（绝对路径或相对当前运行目录）。可以传入项目根目录或其子目录，MCP Server 会向上查找并验证 `foundry.toml`，并在执行所有 `forge` 命令时使用该配置；若未找到，则直接报错并终止任务。
-- `timeoutMs` (number, optional): 超时（默认 300000ms）
-- `forge_test.matchPath` (string, optional): 等同于 `forge test --match-path <matchPath>`
-- `forge_test.extraArgs` / `forge_build.extraArgs` (string[], optional): 追加到 forge 命令末尾的额外参数
+### 手动管理（可选）
 
-### 调用示例
+如果需要手动管理容器：
 
-在 MCP 客户端里对工具调用时，等价于在沙盒中执行：
+```bash
+# 启动容器
+docker-compose up -d foundry-sandbox
 
-- `forge_clean({ projectPath: "/abs/path/to/project" })` → `forge clean`
-- `forge_build({ projectPath: "/abs/path/to/project" })` → `forge build`
-- `forge_test({ projectPath: "/abs/path/to/project", matchPath: "test/security/Reentrancy.t.sol" })` → `forge test --match-path test/security/Reentrancy.t.sol`
+# 停止容器
+docker-compose stop foundry-sandbox
 
-## MCP 客户端配置（stdio）
+# 查看容器状态
+docker ps | grep foundry-sandbox
+```
 
-Example `mcp.json` entry:
+### 启动 Anvil 节点（可选）
+
+如果需要本地测试节点：
+
+```bash
+docker-compose up -d anvil
+```
+
+Anvil 将在以下端口运行：
+- `8545`: HTTP RPC
+- `8546`: WebSocket RPC
+
+## 配置 MCP 客户端
+
+### 配置方式
+
+**重要更新**: MCP Server 现在支持在工具调用时传入项目路径，无需在配置中设置环境变量。
+
+#### Claude Desktop 配置
+
+编辑配置文件：
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "foundry-sandbox": {
       "command": "node",
-      "args": ["<ABS_PATH>/foundry-mcp/dist/src/index.js"],
-      "env": {
-        "FOUNDRY_MCP_IMAGE": "foundry-sandbox:latest"
-      }
+      "args": [
+        "/absolute/path/to/foundry-mcp/dist/index.js"
+      ]
     }
   }
 }
 ```
 
-## 常见问题
+#### Cursor 配置
 
-- Docker 未安装或 `docker` 不在 PATH：安装 Docker Desktop，并确保终端里可运行 `docker version`
-- 构建/测试很慢：优先用 `matchPath` 缩小测试范围；必要时提高 `timeoutMs`
-- 不想每次都删除镜像：设置 `FOUNDRY_MCP_CLEANUP_IMAGE=false`
+```json
+{
+  "mcpServers": {
+    "foundry-sandbox": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/foundry-mcp/dist/index.js"
+      ]
+    }
+  }
+}
+```
+
+**配置说明**:
+- `/absolute/path/to/foundry-mcp`: MCP Server 的安装路径
+- **无需配置项目路径**：项目路径在工具调用时作为 `projectPath` 参数传入
+- **Docker 容器会自动创建和启动**，无需手动运行 `docker-compose up -d`
+
+### 开发模式
+
+```json
+{
+  "mcpServers": {
+    "foundry-sandbox": {
+      "command": "yarn",
+      "args": ["dev"]
+    }
+  }
+}
+```
+
+详细配置说明请参考 [MCP_CONFIG.md](./MCP_CONFIG.md)
+
+## 可用工具
+
+### `forge_test`
+
+在 Docker 容器中运行 `forge test` 命令。
+
+**参数**:
+- `projectPath` (必需): Foundry 项目根路径（包含 `foundry.toml` 的目录），必须是绝对路径
+- `testPath` (可选): 测试路径匹配模式，例如 `"test/MyTest.t.sol"`
+- `matchPath` (可选): 使用 `--match-path` 参数匹配测试文件路径（与 `testPath` 互斥）
+- `extraArgs` (可选): 额外的 `forge test` 参数数组
+
+**示例**:
+```json
+{
+  "name": "forge_test",
+  "arguments": {
+    "projectPath": "/absolute/path/to/your/foundry/project",
+    "matchPath": "test/MyTest.t.sol"
+  }
+}
+```
+
+### `forge_build`
+
+在 Docker 容器中运行 `forge build` 命令。
+
+**参数**:
+- `projectPath` (必需): Foundry 项目根路径（包含 `foundry.toml` 的目录），必须是绝对路径
+- `extraArgs` (可选): 额外的 `forge build` 参数数组
+
+**示例**:
+```json
+{
+  "name": "forge_build",
+  "arguments": {
+    "projectPath": "/absolute/path/to/your/foundry/project",
+    "extraArgs": ["--sizes"]
+  }
+}
+```
+
+### `forge_clean`
+
+在 Docker 容器中运行 `forge clean` 命令，清理构建缓存。
+
+**参数**:
+- `projectPath` (必需): Foundry 项目根路径（包含 `foundry.toml` 的目录），必须是绝对路径
+
+**示例**:
+```json
+{
+  "name": "forge_clean",
+  "arguments": {
+    "projectPath": "/absolute/path/to/your/foundry/project"
+  }
+}
+```
+
+## 使用示例
+
+### 运行所有测试
+
+```
+User: 在沙盒里运行 /path/to/project 项目的所有测试，并告诉我结果。
+```
+
+Agent 将调用 `forge_test` 工具，返回测试结果：
+```json
+{
+  "name": "forge_test",
+  "arguments": {
+    "projectPath": "/path/to/project"
+  }
+}
+```
+
+### 运行特定测试
+
+```
+User: 运行 /path/to/project 项目中 test/MyTest.t.sol 的测试。
+```
+
+Agent 将调用 `forge_test` 工具，参数为：
+```json
+{
+  "name": "forge_test",
+  "arguments": {
+    "projectPath": "/path/to/project",
+    "matchPath": "test/MyTest.t.sol"
+  }
+}
+```
+
+### 构建项目
+
+```
+User: 在沙盒中构建 /path/to/project 项目。
+```
+
+Agent 将调用 `forge_build` 工具：
+```json
+{
+  "name": "forge_build",
+  "arguments": {
+    "projectPath": "/path/to/project"
+  }
+}
+```
+
+## 工作原理
+
+1. **MCP Server** 接收来自 AI 的工具调用请求
+2. **Docker Manager** 确保 Docker 容器正在运行
+3. **Forge Tool** 在容器中执行相应的 `forge` 命令
+4. 命令输出（stdout/stderr）和退出码被捕获并返回给 AI
+5. AI 解析结果并向用户报告
+
+## 项目结构
+
+```
+foundry-mcp/
+├── src/
+│   ├── index.ts              # MCP Server 主文件
+│   ├── docker-manager.ts     # Docker 容器管理
+│   └── tools/
+│       └── forge-tool.ts     # Forge 工具实现
+├── Dockerfile.foundry        # Foundry Docker 镜像
+├── docker-compose.yml        # Docker Compose 配置
+├── foundry.toml              # Foundry 配置文件
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+## 开发
+
+### 开发模式
+
+```bash
+yarn dev
+```
+
+### 构建
+
+```bash
+yarn build
+```
+
+### 运行
+
+```bash
+yarn start
+```
+
+## 故障排除
+
+### Docker 容器未找到
+
+**MCP Server 现在会自动创建容器**。如果仍然失败：
+
+1. 检查 `FOUNDRY_PROJECT_PATH` 环境变量是否正确设置
+2. 确保项目目录中存在 `docker-compose.yml` 文件
+3. 手动运行作为备选方案：
+
+```bash
+docker-compose up -d foundry-sandbox
+```
+
+### Docker 未运行
+
+确保 Docker Desktop 正在运行：
+
+```bash
+docker ps
+```
+
+### 项目路径错误
+
+如果遇到路径相关错误：
+
+1. 检查 `FOUNDRY_PROJECT_PATH` 环境变量是否为绝对路径
+2. 确保路径指向包含 `foundry.toml` 的项目根目录
+3. 查看 MCP Server 启动日志，确认使用的项目路径
+
+### 权限问题
+
+如果遇到权限问题，确保 Docker 有权限访问项目目录。
+
+### 端口冲突
+
+如果 Anvil 端口被占用，修改 `docker-compose.yml` 中的端口映射。
+
+## 安全注意事项
+
+- FFI 功能在 Docker 容器中运行，比在宿主机上更安全
+- 容器与宿主机隔离，但通过卷挂载共享文件
+- 建议在生产环境中使用只读卷挂载（如果需要）
+
+## 许可证
+
+MIT
+
