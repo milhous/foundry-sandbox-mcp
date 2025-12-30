@@ -416,6 +416,8 @@ foundry-mcp/
 
 所有代码提交必须遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范。
 
+**重要**: 所有提交信息（包括 subject、body 和 footer）必须使用**英文**表达，以确保代码库的国际化标准和团队协作的一致性。
+
 #### 提交格式
 
 ```
@@ -451,20 +453,22 @@ foundry-mcp/
 
 #### 主题 (subject)
 
+- **必须使用英文**
 - 使用祈使句，首字母小写
 - 不以句号结尾
 - 不超过 50 个字符
 
 #### 正文 (body)
 
-可选，详细描述提交内容：
+可选，详细描述提交内容（**必须使用英文**）：
 
 - 说明代码变更的动机
 - 与之前行为的对比
+- 列出主要变更点
 
 #### 页脚 (footer)
 
-可选，用于：
+可选，用于（**必须使用英文**）：
 
 - 关闭 Issue: `Closes #123`
 - 破坏性变更: `BREAKING CHANGE: <description>`
@@ -475,32 +479,49 @@ foundry-mcp/
 # 新功能
 feat(server): add docker compose support
 
+Add docker compose configuration for easier development setup.
+This allows developers to start the MCP server with a single command.
+
 # 修复 bug
 fix(forge): handle command execution errors
+
+Fix error handling when forge commands fail in Docker container.
+Previously, errors were not properly caught and reported to the client.
 
 # 文档更新
 docs: update README with docker compose usage
 
+Add section explaining how to use docker compose for local development.
+Include examples of common docker compose commands.
+
 # 重构
 refactor(docker): simplify container management
+
+Extract container lifecycle management into separate methods.
+This improves code readability and makes testing easier.
 
 # 测试
 test: add integration tests for forge commands
 
+Add comprehensive integration tests for forge test, build, and clean commands.
+Tests verify that commands execute correctly in Docker containers.
+
 # 破坏性变更
 feat(server)!: change tool API structure
 
-BREAKING CHANGE: tool parameters now use camelCase instead of snake_case
+BREAKING CHANGE: tool parameters now use camelCase instead of snake_case.
+All tool callers must update their parameter names accordingly.
 ```
 
 #### 提交检查
 
 在提交前确保：
 
-1. 提交信息符合 Conventional Commits 格式
-2. 提交信息清晰描述变更内容
-3. 相关代码已通过测试
-4. 已更新相关文档（如需要）
+1. **提交信息使用英文**（subject、body、footer 全部使用英文）
+2. 提交信息符合 Conventional Commits 格式
+3. 提交信息清晰描述变更内容
+4. 相关代码已通过测试
+5. 已更新相关文档（如需要）
 
 ## 调试技巧
 
