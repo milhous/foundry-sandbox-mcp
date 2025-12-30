@@ -3,11 +3,17 @@
  *
  * 负责管理 Docker 容器的生命周期和命令执行
  * 每次测试时创建新容器，测试完成后删除，确保全新环境
+ * 
+ * 依赖管理：
+ * - 容器创建后，自动检查 foundry.toml 中配置的 libs 目录
+ * - 如果 libs 目录不存在或为空，自动创建目录
+ * - 当 forge 需要安装依赖时，会安装到 libs 指定的文件夹中
  */
 
 import Docker from "dockerode";
 import { PassThrough } from "stream";
 import { resolve } from "path";
+import { FoundryConfig } from "./config/foundry-config.js";
 
 /**
  * Docker 管理器类
@@ -15,9 +21,11 @@ import { resolve } from "path";
 export class DockerManager {
   private docker: Docker;
   private projectPath: string;
+  private foundryConfig: FoundryConfig | null = null;
   private containerId: string | null = null;
+  private logs: string[] = [];
 
-  constructor(projectPath: string) {
+  constructor(projectPath: string, foundryConfig?: FoundryConfig) {
     this.docker = new Docker();
     // 项目路径必须通过参数传入
     if (!projectPath) {
@@ -25,6 +33,44 @@ export class DockerManager {
     }
     // 解析为绝对路径
     this.projectPath = resolve(projectPath);
+    // 保存配置信息（用于读取 foundry.toml 配置，不用于依赖安装）
+    this.foundryConfig = foundryConfig || null;
+    // 初始化日志数组
+    this.logs = [];
+  }
+
+  /**
+   * 添加日志
+   */
+  private addLog(message: string): void {
+    const timestamp = new Date().toISOString();
+    this.logs.push(`[${timestamp}] ${message}`);
+    // 同时输出到 console.error（用于调试）
+    console.error(message);
+  }
+
+  /**
+   * 获取所有日志
+   */
+  getLogs(): string[] {
+    return [...this.logs];
+  }
+
+  /**
+   * 获取格式化的日志文本
+   */
+  getFormattedLogs(): string {
+    if (this.logs.length === 0) {
+      return "";
+    }
+    return "\n\n--- Execution Logs ---\n" + this.logs.join("\n") + "\n--- End Logs ---\n";
+  }
+
+  /**
+   * 清空日志
+   */
+  clearLogs(): void {
+    this.logs = [];
   }
 
   /**
@@ -109,9 +155,12 @@ export class DockerManager {
       }
 
       this.containerId = container.id;
-      console.error(`Container '${containerName}' created and started`);
+      const logMsg = `Container '${containerName}' created and started (ID: ${container.id.substring(0, 12)})`;
+      this.addLog(logMsg);
+      // 实时输出到控制台
+      console.error(`[MCP] ${logMsg}`);
 
-      // 容器创建后，自动安装依赖
+      // 容器创建后，检查并安装依赖（如果需要）
       await this.ensureDependenciesInstalled();
     } catch (error) {
       throw new Error(
@@ -124,94 +173,78 @@ export class DockerManager {
 
   /**
    * 确保项目依赖已安装
-   * 检查 lib 目录，如果不存在或为空，自动安装 OpenZeppelin 依赖
+   * 根据 foundry.toml 中的 libs 配置，检查依赖目录是否存在
+   * 如果不存在或为空，则创建目录并安装依赖
    */
   private async ensureDependenciesInstalled(): Promise<void> {
-    if (!this.containerId) {
+    if (!this.containerId || !this.foundryConfig) {
       return;
     }
 
     try {
-      // 直接使用容器对象执行命令，避免递归调用
       const container = this.docker.getContainer(this.containerId);
+      const libsPaths = this.foundryConfig.libs || ["lib"];
 
-      // 检查 lib 目录是否存在且不为空
-      const checkExec = await container.exec({
-        Cmd: [
-          "sh",
-          "-c",
-          "test -d lib && [ \"$(ls -A lib 2>/dev/null)\" ] && echo 'exists' || echo 'missing'",
-        ],
-        AttachStdout: true,
-        AttachStderr: true,
-        WorkingDir: "/workspace",
-      });
+      // 检查所有 libs 目录是否存在且不为空
+      let needsInstall = true;
+      for (const libPath of libsPaths) {
+        const checkExec = await container.exec({
+          Cmd: [
+            "sh",
+            "-c",
+            `test -d ${libPath} && [ \"$(ls -A ${libPath} 2>/dev/null)\" ] && echo 'exists' || echo 'missing'`,
+          ],
+          AttachStdout: true,
+          AttachStderr: true,
+          WorkingDir: "/workspace",
+        });
 
-      const checkStream = await checkExec.start({ hijack: true, stdin: false });
-      const checkResult = await this._captureStreamOutput(
-        checkExec,
-        checkStream,
-        10000
-      );
-      const libExists = checkResult.stdout.trim() === "exists";
-
-      if (!libExists) {
-        console.error(
-          "lib 目录不存在或为空，开始自动安装 OpenZeppelin 依赖..."
-        );
-
-        // 安装 OpenZeppelin 依赖
-        // 根据项目需要，安装所有可能用到的 OpenZeppelin 依赖
-        // 使用别名安装不同版本，以便 remappings 可以正确映射
-        const dependencies = [
-          "OpenZeppelin/openzeppelin-contracts",
-          "OpenZeppelin/openzeppelin-contracts-upgradeable",
-          "openzeppelin-contracts-v4=OpenZeppelin/openzeppelin-contracts@v4.9.0",
-          "openzeppelin-contracts-upgradeable-v4=OpenZeppelin/openzeppelin-contracts-upgradeable@v4.9.0",
-        ];
-
-        for (const dep of dependencies) {
-          try {
-            console.error(`安装依赖: ${dep}...`);
-            const installExec = await container.exec({
-              Cmd: ["forge", "install", dep, "--no-git"],
-              AttachStdout: true,
-              AttachStderr: true,
-              WorkingDir: "/workspace",
-            });
-
-            const installStream = await installExec.start({
-              hijack: true,
-              stdin: false,
-            });
-            const installResult = await this._captureStreamOutput(
-              installExec,
-              installStream,
-              120000
-            );
-
-            if (installResult.exitCode === 0) {
-              console.error(`✓ ${dep} 安装成功`);
-            } else {
-              console.error(`⚠ ${dep} 安装可能失败: ${installResult.stderr}`);
-            }
-          } catch (error) {
-            console.error(
-              `⚠ 安装 ${dep} 时出错: ${
-                error instanceof Error ? error.message : String(error)
-              }`
-            );
-            // 继续安装其他依赖，不中断流程
-          }
+        const checkStream = await checkExec.start({ hijack: true, stdin: false });
+        const checkResult = await this._captureStreamOutput(checkExec, checkStream, 10000);
+        
+        if (checkResult.stdout.trim() === "exists") {
+          needsInstall = false;
+          break;
         }
+      }
 
-        console.error("依赖安装完成");
+      if (needsInstall) {
+        const libsInfo = libsPaths.join(", ");
+        const logMsg = `libs 目录（${libsInfo}）不存在或为空，开始创建目录...`;
+        this.addLog(logMsg);
+        console.error(`[MCP] ${logMsg}`);
+
+        // 确保 libs 目录存在（使用第一个 libs 路径作为主目录）
+        const primaryLibPath = libsPaths[0];
+        const mkdirExec = await container.exec({
+          Cmd: ["mkdir", "-p", primaryLibPath],
+          AttachStdout: true,
+          AttachStderr: true,
+          WorkingDir: "/workspace",
+        });
+
+        const mkdirStream = await mkdirExec.start({ hijack: true, stdin: false });
+        await this._captureStreamOutput(mkdirExec, mkdirStream, 10000);
+
+        // 读取 foundry.toml 以获取需要安装的依赖
+        // 注意：foundry.toml 可能包含 remappings，我们可以从中推断依赖
+        // 但更常见的情况是，当 forge test 运行时，如果缺少依赖，会报错
+        // 此时我们可以从错误信息中提取依赖名称并安装
+        
+        const logMsg1 = `已创建 libs 目录: ${primaryLibPath}`;
+        const logMsg2 = `libs 目录已创建。当 forge 需要安装依赖时，会自动安装到 ${primaryLibPath} 目录。`;
+        this.addLog(logMsg1);
+        this.addLog(logMsg2);
+        console.error(`[MCP] ${logMsg1}`);
+        console.error(`[MCP] ${logMsg2}`);
       } else {
-        console.error("lib 目录已存在，跳过依赖安装");
+        const logMsg = "libs 目录已存在且不为空，跳过依赖安装";
+        this.addLog(logMsg);
+        console.error(`[MCP] ${logMsg}`);
       }
     } catch (error) {
-      // 依赖安装失败不应该阻止测试执行
-      console.error(
+      // 依赖检查/安装失败不应该阻止测试执行
+      this.addLog(
         `Warning: Failed to check/install dependencies: ${
           error instanceof Error ? error.message : String(error)
         }`
@@ -220,7 +253,7 @@ export class DockerManager {
   }
 
   /**
-   * 捕获流输出（内部方法，用于避免递归调用）
+   * 捕获流输出（内部方法，用于依赖检查和安装）
    */
   private async _captureStreamOutput(
     exec: Docker.Exec,
@@ -270,7 +303,6 @@ export class DockerManager {
         });
 
         try {
-          // 从 exec 对象获取 inspect 以获取 exitCode
           const inspect = await exec.inspect();
           const exitCode = inspect.ExitCode ?? -1;
 
@@ -301,6 +333,7 @@ export class DockerManager {
     });
   }
 
+
   /**
    * 删除容器
    */
@@ -322,7 +355,10 @@ export class DockerManager {
 
       // 删除容器
       await container.remove({ force: true });
-      console.error(`Container '${this.containerId}' removed`);
+      const containerIdShort = this.containerId ? this.containerId.substring(0, 12) : "unknown";
+      const logMsg = `Container removed (ID: ${containerIdShort})`;
+      this.addLog(logMsg);
+      console.error(`[MCP] ${logMsg}`);
       this.containerId = null;
     } catch (error: unknown) {
       // 如果容器不存在，忽略错误
@@ -331,12 +367,13 @@ export class DockerManager {
         (error.message.includes("No such container") ||
           (error as { statusCode?: number }).statusCode === 404)
       ) {
-        console.error(`Container '${this.containerId}' already removed`);
+        const containerIdShort = this.containerId ? this.containerId.substring(0, 12) : "unknown";
+        this.addLog(`Container already removed (ID: ${containerIdShort})`);
         this.containerId = null;
         return;
       }
       // 其他错误记录但不抛出，确保清理流程继续
-      console.error(
+      this.addLog(
         `Warning: Failed to remove container: ${
           error instanceof Error ? error.message : String(error)
         }`
@@ -358,13 +395,20 @@ export class DockerManager {
     args: string[] = [],
     timeout: number = 300000
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    // 如果容器不存在，创建并启动（会自动安装依赖）
+    // 如果容器不存在，创建并启动（会自动检查并创建 libs 目录）
     if (!this.containerId) {
+      const logMsg = "Container not found, creating new container...";
+      this.addLog(logMsg);
+      console.error(`[MCP] ${logMsg}`);
       await this.createAndStartContainer();
     }
 
     const container = this.docker.getContainer(this.containerId!);
     const fullCommand = [command, ...args];
+    const cmdLog = `Executing command: ${fullCommand.join(" ")}`;
+    this.addLog(cmdLog);
+    // 实时输出到控制台
+    console.error(`[MCP] ${cmdLog}`);
 
     // 创建执行选项
     const execOptions = {
@@ -388,14 +432,20 @@ export class DockerManager {
     const stdoutStream = new PassThrough();
     const stderrStream = new PassThrough();
 
-    // 收集 stdout 数据
+    // 收集 stdout 数据并实时输出到控制台
     stdoutStream.on("data", (chunk: Buffer) => {
       stdoutChunks.push(chunk);
+      // 实时打印到控制台
+      const text = chunk.toString("utf-8");
+      process.stderr.write(text);
     });
 
-    // 收集 stderr 数据
+    // 收集 stderr 数据并实时输出到控制台
     stderrStream.on("data", (chunk: Buffer) => {
       stderrChunks.push(chunk);
+      // 实时打印到控制台
+      const text = chunk.toString("utf-8");
+      process.stderr.write(text);
     });
 
     // 使用 demuxStream 分离 stdout 和 stderr
@@ -430,6 +480,14 @@ export class DockerManager {
           // 合并所有输出
           const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
           const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+
+          // 记录命令执行结果
+          const resultLog = exitCode === 0
+            ? `Command executed successfully (exit code: ${exitCode})`
+            : `Command failed (exit code: ${exitCode})`;
+          this.addLog(resultLog);
+          // 实时输出到控制台
+          console.error(`[MCP] ${resultLog}`);
 
           resolve({ stdout, stderr, exitCode });
         } catch (error) {

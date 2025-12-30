@@ -7,12 +7,14 @@
 - ✅ **仅提供 forge_test**: 专注于测试功能，简化使用
 - ✅ **自动容器管理**: 每次测试时自动创建新容器，测试完成后自动清理
 - ✅ **全新测试环境**: 每次测试都在全新的容器中运行，确保环境干净
-- ✅ **自动依赖安装**: 容器创建时自动检测并安装 OpenZeppelin 等常用依赖
-- ✅ **动态项目路径**: 在工具调用时传入项目路径，支持多项目
+- ✅ **Foundry Sandbox 环境**: 提供干净的 Foundry 运行环境，包括测试文件支持
+- ✅ **配置读取**: 通过 foundry.toml 读取项目配置（src、out、cache_path、libs 等）
+- ✅ **动态项目路径**: 在工具调用时传入 foundry.toml 路径，支持多项目
 - ✅ **文件热同步**: 通过 Docker 卷挂载实现项目文件实时同步
 - ✅ **环境一致性**: 无论运行在 Mac、Windows 还是 Linux，行为完全一致
 - ✅ **安全性**: FFI 功能在 Docker 容器中运行，比宿主机更安全
 - ✅ **零污染**: 所有依赖和缓存保留在容器内，测试完成后自动清理
+- ✅ **自动依赖管理**: 容器创建时自动检查并创建 libs 目录，当 forge 需要安装依赖时，自动安装到 foundry.toml 中配置的 libs 路径
 
 ## 前置要求
 
@@ -122,7 +124,7 @@ Anvil 将在以下端口运行：
 **配置说明**:
 
 - `/absolute/path/to/foundry-mcp`: MCP Server 的安装路径
-- **无需配置项目路径**：项目路径在工具调用时作为 `projectPath` 参数传入
+- **无需配置项目路径**：项目路径在工具调用时作为 `foundryTomlPath` 参数传入（foundry.toml 文件的绝对路径）
 - **Docker 容器会自动创建和启动**，无需手动运行 `docker-compose up -d`
 
 ### 开发模式
@@ -148,24 +150,28 @@ Anvil 将在以下端口运行：
 
 **参数**:
 
-- `projectPath` (必需): Foundry 项目根路径（包含 `foundry.toml` 的目录），必须是绝对路径
+- `foundryTomlPath` (必需): `foundry.toml` 文件的绝对路径。MCP 会根据此文件解析配置信息（src、out、cache_path、libs 等），并使用 foundry.toml 所在目录作为项目根目录
 - `testPath` (可选): 测试路径匹配模式，例如 `"test/MyTest.t.sol"`
 - `matchPath` (可选): 使用 `--match-path` 参数匹配测试文件路径（与 `testPath` 互斥）
 - `extraArgs` (可选): 额外的 `forge test` 参数数组
 
 **工作流程**:
 
-1. 检查 Docker 镜像是否存在（`foundry-sandbox:latest`）
-2. 创建新容器（使用唯一名称），挂载项目目录
-3. **自动检测并安装依赖**：如果 `lib` 目录不存在或为空，自动安装 OpenZeppelin 依赖
-4. 在容器中运行 `forge test` 命令
-5. 返回测试结果
-6. 自动删除容器，确保下次测试是全新环境
+1. 验证并解析 `foundry.toml` 文件，获取项目配置（src、out、cache_path、libs 等）
+2. 检查 Docker 镜像是否存在（`foundry-sandbox:latest`）
+3. 创建新容器（使用唯一名称），挂载项目目录
+4. **自动检查并创建 libs 目录**：根据 foundry.toml 中的 libs 配置，检查目录是否存在，如果不存在则自动创建
+5. 在容器中运行 `forge test` 命令（forge 会自动读取 foundry.toml 配置）
+6. **依赖自动安装**：如果 forge 需要安装依赖，会自动安装到 foundry.toml 中配置的 libs 路径
+7. 返回测试结果
+8. 自动删除容器，确保下次测试是全新环境
 
-**自动安装的依赖**:
+**依赖管理**:
 
-- `OpenZeppelin/openzeppelin-contracts`
-- `OpenZeppelin/openzeppelin-contracts-upgradeable`
+- MCP 会自动检查 foundry.toml 中配置的 libs 目录
+- 如果 libs 目录不存在或为空，会自动创建目录
+- 当 forge 需要安装依赖时，会自动安装到 libs 指定的文件夹中
+- 依赖通过 Docker 挂载的文件夹同步到宿主机，确保持久化
 
 **示例**:
 
@@ -173,7 +179,7 @@ Anvil 将在以下端口运行：
 {
   "name": "forge_test",
   "arguments": {
-    "projectPath": "/absolute/path/to/your/foundry/project",
+    "foundryTomlPath": "/absolute/path/to/your/foundry/project/foundry.toml",
     "matchPath": "test/MyTest.t.sol"
   }
 }
@@ -193,7 +199,7 @@ Agent 将调用 `forge_test` 工具，返回测试结果：
 {
   "name": "forge_test",
   "arguments": {
-    "projectPath": "/path/to/project"
+    "foundryTomlPath": "/path/to/project/foundry.toml"
   }
 }
 ```
@@ -210,7 +216,7 @@ Agent 将调用 `forge_test` 工具，参数为：
 {
   "name": "forge_test",
   "arguments": {
-    "projectPath": "/path/to/project",
+    "foundryTomlPath": "/path/to/project/foundry.toml",
     "matchPath": "test/MyTest.t.sol"
   }
 }

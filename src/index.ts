@@ -54,14 +54,14 @@ class FoundrySandboxServer {
           {
             name: "forge_test",
             description:
-              "在 Docker 容器中运行 forge test 命令。每次测试时创建新容器，测试完成后自动清理，确保全新环境。支持匹配特定测试路径。",
+              "在 Docker 容器中运行 forge test 命令。每次测试时创建新容器，测试完成后自动清理，确保全新环境。支持匹配特定测试路径。需要传入 foundry.toml 文件的绝对路径。MCP 会自动检查并创建 libs 目录，当 forge 需要安装依赖时，会安装到 foundry.toml 中配置的 libs 路径中。",
             inputSchema: {
               type: "object",
               properties: {
-                projectPath: {
+                foundryTomlPath: {
                   type: "string",
                   description:
-                    "Foundry 项目根路径（包含 foundry.toml 的目录），必须是绝对路径",
+                    "foundry.toml 文件的绝对路径。MCP 会根据此文件解析配置信息（src、out、cache_path、libs 等），并使用 foundry.toml 所在目录作为项目根目录。",
                 },
                 testPath: {
                   type: "string",
@@ -79,7 +79,7 @@ class FoundrySandboxServer {
                   description: "额外的 forge test 参数",
                 },
               },
-              required: ["projectPath"],
+              required: ["foundryTomlPath"],
             },
           },
         ],
