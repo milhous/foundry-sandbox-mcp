@@ -27,6 +27,7 @@ import { readFileSync, existsSync } from "fs";
 import { resolve, join } from "path";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { LoggingMessageNotification } from "@modelcontextprotocol/sdk/types.js";
+import { parseFoundryToml } from "../config/foundry-config.js";
 
 /**
  * 依赖清单文件格式
@@ -78,6 +79,10 @@ const ForgeTestArgsSchema = z.object({
       "依赖项清单文件路径（相对项目根路径），JSON 对象格式，例如 'dependencies.json'"
     ),
   extraArgs: z.array(z.string()).optional().describe("额外的 forge test 参数"),
+  enablePrune: z
+    .boolean()
+    .optional()
+    .describe("测试完成后是否执行 docker system prune -f，默认 false"),
 });
 
 /**
@@ -233,12 +238,27 @@ export class ForgeTool {
   }
 
   /**
+   * 格式化耗时显示
+   */
+  private formatDuration(ms: number): string {
+    const seconds = (ms / 1000).toFixed(2);
+    const minutes = Math.floor(ms / 60000);
+    const secondsRemainder = ((ms % 60000) / 1000).toFixed(2);
+    return ms >= 60000
+      ? `${minutes}分${secondsRemainder}秒`
+      : `${seconds}秒`;
+  }
+
+  /**
    * 运行 forge test 命令
    * 每次测试时创建新容器，测试完成后删除，确保全新环境
    */
   async runTest(args: unknown): Promise<{
     content: Array<{ type: string; text: string }>;
   }> {
+    // 记录开始时间
+    const startTime = Date.now();
+
     // 立即发送开始日志，确保 Cursor 能看到工具已开始执行
     const startMessage = "🔧 开始执行 forge test 工具...";
     this.sendLoggingMessage("info", startMessage, {
@@ -276,6 +296,60 @@ export class ForgeTool {
       action: "project_root_validated",
       projectRoot,
     });
+
+    // 验证并解析 foundry.toml（若缺失则立即失败）
+    const foundryTomlPath = join(projectRoot, "foundry.toml");
+    if (!existsSync(foundryTomlPath)) {
+      const errorMsg = `❌ 找不到 foundry.toml: ${foundryTomlPath}`;
+      this.sendLoggingMessage("error", errorMsg, {
+        action: "validate_foundry_toml",
+        foundryTomlPath,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `FAIL. Error: foundry.toml not found at ${foundryTomlPath}`,
+          },
+        ],
+      };
+    }
+
+    let foundryConfigLibs: string[] = [];
+    try {
+      const foundryConfig = parseFoundryToml(foundryTomlPath);
+      foundryConfigLibs = Array.isArray(foundryConfig.libs)
+        ? foundryConfig.libs
+        : ["lib"];
+      if (foundryConfigLibs.length === 0) {
+        foundryConfigLibs = ["lib"];
+      }
+      this.sendLoggingMessage(
+        "info",
+        `⚙️ 解析 foundry.toml 成功，libs: ${foundryConfigLibs.join(", ")}`,
+        {
+          action: "parse_foundry_toml",
+          libs: foundryConfigLibs,
+        }
+      );
+    } catch (error) {
+      const errorMsg = `❌ 解析 foundry.toml 失败: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      this.sendLoggingMessage("error", errorMsg, {
+        action: "parse_foundry_toml_failed",
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `FAIL. Error: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          },
+        ],
+      };
+    }
 
     // 读取依赖清单
     let dependencies: { forge: string[]; npm: string[]; yarn: string[] };
@@ -345,14 +419,16 @@ export class ForgeTool {
       }
     );
 
-    // 为每次测试创建新的 DockerManager（会创建新容器）
-    const dockerManager = new DockerManager(projectRoot);
+    // 为每次测试创建新的 DockerManager（会创建新容器），传入 libs 配置
+    let dockerManager: DockerManager | null = null;
 
     // 收集所有进度日志，以便在最终响应中返回
     const progressLogs: string[] = [];
 
     try {
+      dockerManager = new DockerManager(projectRoot, undefined, foundryConfigLibs);
       // 步骤 1: 创建并启动容器
+      const step1StartTime = Date.now();
       const step1Start = "🚀 步骤 1/4: 正在创建 Docker 容器...";
       progressLogs.push(step1Start);
       this.sendLoggingMessage("info", step1Start, {
@@ -364,17 +440,22 @@ export class ForgeTool {
       console.error(step1Start);
       console.error("═══════════════════════════════════════════════════════");
       await dockerManager.createAndStartContainer();
-      const step1Complete = "✅ 步骤 1/4: Docker 容器创建成功";
+      const step1Duration = Date.now() - step1StartTime;
+      const step1DurationText = this.formatDuration(step1Duration);
+      const step1Complete = `✅ 步骤 1/4: Docker 容器创建成功 (耗时: ${step1DurationText})`;
       progressLogs.push(step1Complete);
       this.sendLoggingMessage("info", step1Complete, {
         step: 1,
         total: 4,
         completed: true,
+        duration: step1Duration,
+        durationText: step1DurationText,
       });
       console.error(step1Complete);
       console.error("");
 
       // 步骤 2: 安装依赖（forge + npm + yarn）
+      const step2StartTime = Date.now();
       const totalDeps =
         dependencies.forge.length +
         dependencies.npm.length +
@@ -398,12 +479,16 @@ export class ForgeTool {
         dependencies.npm,
         dependencies.yarn
       );
-      const step2Complete = "✅ 步骤 2/4: 依赖处理完成";
+      const step2Duration = Date.now() - step2StartTime;
+      const step2DurationText = this.formatDuration(step2Duration);
+      const step2Complete = `✅ 步骤 2/4: 依赖处理完成 (耗时: ${step2DurationText})`;
       progressLogs.push(step2Complete);
       this.sendLoggingMessage("info", step2Complete, {
         step: 2,
         total: 4,
         completed: true,
+        duration: step2Duration,
+        durationText: step2DurationText,
       });
       console.error(step2Complete);
       console.error("");
@@ -424,6 +509,7 @@ export class ForgeTool {
       }
 
       // 步骤 3: 执行测试命令
+      const step3StartTime = Date.now();
       const step3Start = `🧪 步骤 3/4: 正在执行测试 (匹配路径: ${matchPattern})...`;
       progressLogs.push(step3Start);
       this.sendLoggingMessage("info", step3Start, {
@@ -439,18 +525,23 @@ export class ForgeTool {
       console.error("───────────────────────────────────────────────────────");
       let result = await dockerManager.execCommand("forge", cmdArgs);
       console.error("───────────────────────────────────────────────────────");
-      const step3Complete = "✅ 步骤 3/4: 测试执行完成";
+      const step3Duration = Date.now() - step3StartTime;
+      const step3DurationText = this.formatDuration(step3Duration);
+      const step3Complete = `✅ 步骤 3/4: 测试执行完成 (耗时: ${step3DurationText})`;
       progressLogs.push(step3Complete);
       this.sendLoggingMessage("info", step3Complete, {
         step: 3,
         total: 4,
         completed: true,
         exitCode: result.exitCode,
+        duration: step3Duration,
+        durationText: step3DurationText,
       });
       console.error(step3Complete);
       console.error("");
 
       // 步骤 4: 清理容器和 Docker 缓存
+      const step4StartTime = Date.now();
       const step4Start = "🧹 步骤 4/4: 正在清理 Docker 容器和系统缓存...";
       progressLogs.push(step4Start);
       this.sendLoggingMessage("info", step4Start, {
@@ -469,15 +560,27 @@ export class ForgeTool {
       });
       console.error("✓ Docker 容器已清理");
 
-      // 清理 Docker system 缓存
-      await dockerManager.cleanupDockerSystemCache();
+      // 清理 Docker system 缓存（可选）
+      if (validatedArgs.enablePrune) {
+        await dockerManager.cleanupDockerSystemCache();
+      } else {
+        this.sendLoggingMessage(
+          "info",
+          "↪️ 跳过 docker system prune（enablePrune 未开启）",
+          { action: "skip_prune" }
+        );
+      }
 
-      const step4Complete = "✅ 步骤 4/4: Docker 容器和系统缓存清理完成";
+      const step4Duration = Date.now() - step4StartTime;
+      const step4DurationText = this.formatDuration(step4Duration);
+      const step4Complete = `✅ 步骤 4/4: Docker 容器和系统缓存清理完成 (耗时: ${step4DurationText})`;
       progressLogs.push(step4Complete);
       this.sendLoggingMessage("info", step4Complete, {
         step: 4,
         total: 4,
         completed: true,
+        duration: step4Duration,
+        durationText: step4DurationText,
       });
       console.error(step4Complete);
       console.error("");
@@ -506,8 +609,13 @@ export class ForgeTool {
         }
       }
 
+      // 计算总耗时
+      const endTime = Date.now();
+      const totalDuration = endTime - startTime;
+      const durationText = this.formatDuration(totalDuration);
+
       // 获取执行日志
-      const logs = dockerManager.getFormattedLogs();
+      const logs = dockerManager ? dockerManager.getFormattedLogs() : "\n(无执行日志)";
 
       // 构建进度摘要
       const progressSummary =
@@ -526,6 +634,7 @@ export class ForgeTool {
 ${status === "PASS" ? "✅" : "❌"} 测试结果: ${status}${
         reason ? `\n原因: ${reason}` : ""
       }
+⏱️ 总耗时: ${durationText} (${totalDuration}ms)
 ═══════════════════════════════════════════════════════
 
 📋 测试输出:
@@ -534,14 +643,17 @@ ${formattedOutput}
 ───────────────────────────────────────────────────────`;
 
       // 发送完成日志
-      const completeMessage = `🎉 工具执行完成: ${status}`;
+      const completeMessage = `🎉 工具执行完成: ${status} (耗时: ${durationText})`;
       this.sendLoggingMessage("info", completeMessage, {
         action: "tool_complete",
         status,
         exitCode: result.exitCode,
+        duration: totalDuration,
+        durationText,
         timestamp: new Date().toISOString(),
       });
       console.error(completeMessage);
+      console.error(`⏱️ 总耗时: ${durationText}`);
 
       return {
         content: [
@@ -552,13 +664,20 @@ ${formattedOutput}
         ],
       };
     } catch (error) {
+      // 计算总耗时（即使出错也记录）
+      const endTime = Date.now();
+      const totalDuration = endTime - startTime;
+      const durationText = this.formatDuration(totalDuration);
+
       // 发送错误日志
       const errorMsg = `❌ 工具执行失败: ${
         error instanceof Error ? error.message : String(error)
-      }`;
+      } (耗时: ${durationText})`;
       this.sendLoggingMessage("error", errorMsg, {
         action: "tool_error",
         error: error instanceof Error ? error.message : String(error),
+        duration: totalDuration,
+        durationText,
         timestamp: new Date().toISOString(),
       });
       console.error("═══════════════════════════════════════════════════════");
@@ -566,22 +685,24 @@ ${formattedOutput}
       console.error("═══════════════════════════════════════════════════════");
 
       // 即使出错，也尝试清理容器
-      try {
-        await dockerManager.removeContainer();
-        this.sendLoggingMessage("info", "🧹 已清理 Docker 容器", {
-          action: "cleanup_after_error",
-        });
-      } catch (cleanupError) {
-        // 忽略清理错误
-        const cleanupErrorMsg = `Warning: Failed to cleanup container after error: ${
-          cleanupError instanceof Error
-            ? cleanupError.message
-            : String(cleanupError)
-        }`;
-        this.sendLoggingMessage("warning", cleanupErrorMsg, {
-          action: "cleanup_failed",
-        });
-        console.error(cleanupErrorMsg);
+      if (dockerManager) {
+        try {
+          await dockerManager.removeContainer();
+          this.sendLoggingMessage("info", "🧹 已清理 Docker 容器", {
+            action: "cleanup_after_error",
+          });
+        } catch (cleanupError) {
+          // 忽略清理错误
+          const cleanupErrorMsg = `Warning: Failed to cleanup container after error: ${
+            cleanupError instanceof Error
+              ? cleanupError.message
+              : String(cleanupError)
+          }`;
+          this.sendLoggingMessage("warning", cleanupErrorMsg, {
+            action: "cleanup_failed",
+          });
+          console.error(cleanupErrorMsg);
+        }
       }
 
       return {
@@ -590,7 +711,7 @@ ${formattedOutput}
             type: "text",
             text: `FAIL. Error: ${
               error instanceof Error ? error.message : String(error)
-            }`,
+            }\n⏱️ 总耗时: ${durationText} (${totalDuration}ms)`,
           },
         ],
       };

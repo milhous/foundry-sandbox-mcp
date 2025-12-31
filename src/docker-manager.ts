@@ -26,7 +26,7 @@ import { PassThrough } from "stream";
 import { resolve, dirname, join } from "path";
 import { existsSync } from "fs";
 import { fileURLToPath } from "url";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 
 /**
  * Docker 管理器类
@@ -37,8 +37,9 @@ export class DockerManager {
   private mcpProjectPath: string | null = null;
   private containerId: string | null = null;
   private logs: string[] = [];
+  private readonly libsPaths: string[];
 
-  constructor(projectPath: string, mcpProjectPath?: string) {
+  constructor(projectPath: string, mcpProjectPath?: string, libsPaths?: string[]) {
     this.docker = new Docker();
     // 项目路径必须通过参数传入
     if (!projectPath) {
@@ -70,6 +71,8 @@ export class DockerManager {
 
     // 初始化日志数组
     this.logs = [];
+    this.libsPaths =
+      libsPaths && libsPaths.length > 0 ? libsPaths : ["lib"];
   }
 
   /**
@@ -285,19 +288,29 @@ export class DockerManager {
     }
 
     try {
-      // 使用 docker-compose build 构建镜像
+      // 使用 docker compose/docker-compose build 构建镜像
       // -f 指定 compose 文件路径
       // 构建上下文使用 docker 文件夹的父目录（因为 Dockerfile 中的路径是相对于构建上下文的）
       const buildContext = resolve(mcpProjectPath, ".."); // docker 文件夹的父目录
-      this.logProgress("正在执行: docker-compose build foundry-sandbox...");
+      const composeCommand = this.getComposeCommand();
+      const composeArgs = [
+        ...composeCommand.args,
+        "-f",
+        composePath,
+        "build",
+        "foundry-sandbox",
+      ];
+      this.logProgress(
+        `正在执行: ${composeCommand.command} ${composeArgs.join(" ")}...`
+      );
       this.logProgress(`📁 构建上下文: ${buildContext}`);
       this.logProgress("📥 docker-compose 构建输出:");
 
       // 使用 spawn 实现实时输出
       return new Promise<void>((resolve, reject) => {
         const composeProcess = spawn(
-          "docker-compose",
-          ["-f", composePath, "build", "foundry-sandbox"],
+          composeCommand.command,
+          composeArgs,
           {
             cwd: buildContext, // 构建上下文使用 docker 文件夹的父目录
             stdio: ["ignore", "pipe", "pipe"], // stdin 忽略，stdout 和 stderr 使用管道
@@ -826,19 +839,21 @@ export class DockerManager {
     try {
       const container = this.docker.getContainer(this.containerId);
 
-      // 确保 lib 目录存在
-      const libPath = "lib";
-      this.logProgress("检查并创建 lib 目录...");
-      const mkdirExec = await container.exec({
-        Cmd: ["mkdir", "-p", libPath],
-        AttachStdout: true,
-        AttachStderr: true,
-        WorkingDir: "/workspace",
-      });
+      // 确保所有 libs 目录存在
+      const uniqueLibs = Array.from(new Set(this.libsPaths));
+      for (const libPath of uniqueLibs) {
+        this.logProgress(`检查并创建 ${libPath} 目录...`);
+        const mkdirExec = await container.exec({
+          Cmd: ["mkdir", "-p", libPath],
+          AttachStdout: true,
+          AttachStderr: true,
+          WorkingDir: "/workspace",
+        });
 
-      const mkdirStream = await mkdirExec.start({ hijack: true, stdin: false });
-      await this._captureStreamOutput(mkdirExec, mkdirStream, 10000, false);
-      this.logProgress("✓ lib 目录已就绪");
+        const mkdirStream = await mkdirExec.start({ hijack: true, stdin: false });
+        await this._captureStreamOutput(mkdirExec, mkdirStream, 10000, false);
+        this.logProgress(`✓ ${libPath} 目录已就绪`);
+      }
 
       // 计算步骤总数
       let stepNumber = 1;
@@ -1400,5 +1415,26 @@ export class DockerManager {
    */
   getContainerId(): string | null {
     return this.containerId;
+  }
+
+  /**
+   * 选择 docker compose 命令（优先新版 "docker compose"）
+   */
+  private getComposeCommand(): { command: string; args: string[] } {
+    const commonOptions = { stdio: "ignore" as const };
+
+    const dockerCompose = spawnSync("docker", ["compose", "version"], commonOptions);
+    if (!dockerCompose.error && dockerCompose.status === 0) {
+      return { command: "docker", args: ["compose"] };
+    }
+
+    const legacyCompose = spawnSync("docker-compose", ["version"], commonOptions);
+    if (!legacyCompose.error && legacyCompose.status === 0) {
+      return { command: "docker-compose", args: [] };
+    }
+
+    throw new Error(
+      "Neither 'docker compose' nor 'docker-compose' is available. Please install Docker Compose."
+    );
   }
 }

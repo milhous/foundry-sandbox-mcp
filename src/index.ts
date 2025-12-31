@@ -80,6 +80,11 @@ class FoundrySandboxServer {
                   items: { type: "string" },
                   description: "额外的 forge test 参数",
                 },
+                enablePrune: {
+                  type: "boolean",
+                  description:
+                    "是否在测试完成后执行 docker system prune -f，默认为 false（安全模式）",
+                },
               },
               required: ["projectRoot", "testFolderPath", "dependenciesManifestPath"],
             },

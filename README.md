@@ -102,6 +102,7 @@ yarn build
 - `testFolderPath` (必需): 测试合约文件夹路径（相对项目根路径）。例如 `test` 或 `test/unit`。如果路径以 `.sol` 结尾，则直接使用该路径；否则会自动匹配该文件夹下的所有 `.t.sol` 文件
 - `dependenciesManifestPath` (必需): 依赖项清单文件路径（相对项目根路径）。文件格式为 JSON 对象，例如 `dependencies.json`
 - `extraArgs` (可选): 额外的 `forge test` 参数数组
+- `enablePrune` (可选): 是否在测试完成后执行 `docker system prune -f`（默认为 `false`，安全起见默认跳过）
 
 **工作流程**:
 
