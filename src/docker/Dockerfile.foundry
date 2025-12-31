@@ -1,0 +1,28 @@
+# Dockerfile.foundry
+# 使用 Foundry 官方镜像作为基础镜像
+# Foundry 镜像已经包含了所有必要的工具（forge, cast, anvil, chisel 等）
+FROM ghcr.io/foundry-rs/foundry:latest
+
+# 确保以 root 用户运行
+USER root
+
+# 安装 Node.js、npm 和 yarn（用于安装 npm 和 yarn 依赖，如 OpenZeppelin）
+# 使用官方 NodeSource 安装脚本，但先清理可能的锁文件
+RUN rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock* && \
+    apt-get update && \
+    apt-get install -y curl ca-certificates gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g yarn && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# 验证 Node.js、npm 和 yarn 安装
+RUN node --version && npm --version && yarn --version
+
+# 设置工作目录
+WORKDIR /workspace
+
+# 默认命令保持为 bash，以便 docker-compose 可以覆盖
+CMD ["/bin/bash"]
+

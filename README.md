@@ -64,11 +64,28 @@ yarn build
 - ✅ **测试完成后自动清理**：删除容器，确保每次测试都在全新环境中运行
 - ✅ **无需手动操作**：完全自动化，无需手动创建或删除容器
 
-**重要**：确保 Docker 镜像 `foundry-sandbox:latest` 已构建。如果不存在，请运行：
+**重要**：Docker 镜像 `foundry-sandbox:latest` 会在首次使用时自动构建。
 
+如果镜像不存在，MCP 工具会自动：
+1. 检测 MCP 服务器路径（通过环境变量 `FOUNDRY_MCP_PROJECT_PATH` 或自动查找）
+2. 读取 `Dockerfile.foundry` 和 `docker-compose.yml` 配置
+3. 使用 `docker-compose build` 自动构建 Docker 镜像
+
+**手动构建**（可选）：
 ```bash
+# 使用 docker-compose（推荐）
+docker-compose build foundry-sandbox
+
+# 或使用 docker build
 docker build -t foundry-sandbox:latest -f Dockerfile.foundry .
 ```
+
+**设置 MCP 服务器路径**（可选，用于自动构建）：
+```bash
+export FOUNDRY_MCP_PROJECT_PATH=/path/to/foundry-mcp
+```
+
+**注意**：MCP 服务器目录必须同时包含 `Dockerfile.foundry` 和 `docker-compose.yml` 文件。
 
 ### 启动 Anvil 节点（可选）
 

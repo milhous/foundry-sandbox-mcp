@@ -73,7 +73,7 @@ class FoundrySandboxServer {
                 dependenciesManifestPath: {
                   type: "string",
                   description:
-                    "依赖项清单文件路径（相对项目根路径）。文件格式为 JSON 数组，例如 'dependencies.json'。内容示例：[\"foundry-rs/forge-std\", \"OpenZeppelin/openzeppelin-contracts\"]",
+                    "依赖项清单文件路径（相对项目根路径）。文件格式为 JSON 对象，例如 'dependencies.json'。支持两种格式：1) 数组格式（不带版本号）：[\"package-name\"] - 使用最新版本；2) 对象格式（带版本号）：{\"package-name\": \"version\"} - 指定版本。内容示例：{ \"forge\": [\"foundry-rs/forge-std\"], \"npm\": {\"@openzeppelin/contracts\": \"^5.0.2\"}, \"yarn\": [\"@chainlink/contracts\"] }。forge、npm 和 yarn 字段都是可选的，但至少需要提供一个字段。每个字段可以独立选择使用数组或对象格式。",
                 },
                 extraArgs: {
                   type: "array",

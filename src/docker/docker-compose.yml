@@ -1,10 +1,10 @@
-version: '3.8'
+version: "3.8"
 
 services:
   foundry-sandbox:
     build:
-      context: .
-      dockerfile: Dockerfile.foundry
+      context: ..
+      dockerfile: docker/Dockerfile.foundry
     image: foundry-sandbox:latest
     container_name: foundry-sandbox
     volumes:
@@ -25,8 +25,8 @@ services:
   # Anvil 本地节点服务（可选，用于测试）
   anvil:
     build:
-      context: .
-      dockerfile: Dockerfile.foundry
+      context: ..
+      dockerfile: docker/Dockerfile.foundry
     image: foundry-sandbox:latest
     container_name: foundry-anvil
     command: anvil --host 0.0.0.0
@@ -39,4 +39,3 @@ services:
     environment:
       - FOUNDRY_PROFILE=default
     network_mode: bridge
-
