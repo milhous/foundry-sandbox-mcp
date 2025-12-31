@@ -11,6 +11,11 @@ artifacts-foundry/
 cache-foundry/
 out/
 cache/
+contracts/
+test/
+lib/
+foundry.lock
+foundry.toml
 
 # IDE
 .vscode/
