@@ -32,12 +32,14 @@ class FoundrySandboxServer {
       {
         capabilities: {
           tools: {},
+          logging: {}, // 声明支持日志通知功能
         },
       }
     );
 
     // ForgeTool 不再需要预初始化 DockerManager，会在调用时动态创建
-    this.forgeTool = new ForgeTool();
+    // 传递 server 实例以便发送日志通知
+    this.forgeTool = new ForgeTool(this.server);
 
     this.setupHandlers();
     this.setupErrorHandling();
@@ -54,24 +56,24 @@ class FoundrySandboxServer {
           {
             name: "forge_test",
             description:
-              "在 Docker 容器中运行 forge test 命令。每次测试时创建新容器，测试完成后自动清理，确保全新环境。支持匹配特定测试路径。需要传入 foundry.toml 文件的绝对路径。MCP 会自动检查并创建 libs 目录，当 forge 需要安装依赖时，会安装到 foundry.toml 中配置的 libs 路径中。",
+              "在 Docker 容器中运行 forge test 命令。每次测试时创建新容器，测试完成后自动清理，确保全新环境。运行测试前会根据依赖清单文件自动安装依赖。",
             inputSchema: {
               type: "object",
               properties: {
-                foundryTomlPath: {
+                projectRoot: {
                   type: "string",
                   description:
-                    "foundry.toml 文件的绝对路径。MCP 会根据此文件解析配置信息（src、out、cache_path、libs 等），并使用 foundry.toml 所在目录作为项目根目录。",
+                    "项目根路径（绝对路径），用于 Docker 挂载。例如 '/path/to/project'",
                 },
-                testPath: {
+                testFolderPath: {
                   type: "string",
                   description:
-                    "可选的测试路径匹配模式，例如 'test/MyTest.t.sol' 或 'test/**/*.t.sol'",
+                    "测试合约文件夹路径（相对项目根路径）。例如 'test' 或 'test/unit'。如果路径以 .sol 结尾，则直接使用该路径；否则会自动匹配该文件夹下的所有 .t.sol 文件。",
                 },
-                matchPath: {
+                dependenciesManifestPath: {
                   type: "string",
                   description:
-                    "使用 --match-path 参数匹配测试文件路径（与 testPath 互斥）",
+                    "依赖项清单文件路径（相对项目根路径）。文件格式为 JSON 数组，例如 'dependencies.json'。内容示例：[\"foundry-rs/forge-std\", \"OpenZeppelin/openzeppelin-contracts\"]",
                 },
                 extraArgs: {
                   type: "array",
@@ -79,7 +81,7 @@ class FoundrySandboxServer {
                   description: "额外的 forge test 参数",
                 },
               },
-              required: ["foundryTomlPath"],
+              required: ["projectRoot", "testFolderPath", "dependenciesManifestPath"],
             },
           },
         ],
